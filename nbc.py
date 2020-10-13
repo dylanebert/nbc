@@ -5,7 +5,6 @@ import pickle
 import os
 from tqdm import tqdm
 import argparse
-from scipy.spatial.distance import euclidean
 
 assert 'NBC_ROOT' in os.environ, 'set NBC_ROOT envvar'
 NBC_ROOT = os.environ['NBC_ROOT']
@@ -105,7 +104,7 @@ def get_most_moving(seq):
     return most_moving
 
 def get_feature_direct(seq, target, feat):
-    return seq[seq['name'] == target][feat].to_numpy()[np.newaxis, :]
+    return seq[seq['name'] == target][feat].to_numpy()[:, np.newaxis]
 
 def reparameterize(vec):
     start = vec[0]; end = vec[-1]
@@ -117,9 +116,7 @@ def reparameterize(vec):
 def dist_to_head(seq, target):
     head_pos = seq[seq['name'] == 'Head'][['posX', 'posY', 'posZ']].to_numpy()
     target_pos = seq[seq['name'] == target][['posX', 'posY', 'posZ']].to_numpy()
-    dist = np.zeros((head_pos.shape[0],))
-    for i in range(head_pos.shape[0]):
-        dist[i] = euclidean(head_pos[i], target_pos[i])
+    dist = np.sum(np.square(target_pos - head_pos), axis=1)
     return reparameterize(dist)
 
 def avg_vel(seq, target):
@@ -130,7 +127,7 @@ def avg_vel(seq, target):
 def var_vel(seq, target):
     rows = seq[seq['name'] == target]
     var_vel = np.var(rows[['velX', 'velY', 'velZ']].to_numpy(), axis=1)
-    return reparameterize(var_vel)
+    return np.mean(var_vel)[np.newaxis]
 
 def traj(seq, target):
     rows = seq[seq['name'] == target]
@@ -164,13 +161,14 @@ class NBC:
         parser.add_argument('--dynamic_only', help='filter to only objects that can move', type=bool, default=True)
         parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session'], default='token_aligned')
         parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session'], default='chunked')
-        parser.add_argument('--config', help='path to feature configuration file', type=str, default='config/starsem.conf')
+        parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving')
 
     def __init__(self, args):
         self.args = args
         self.load()
         self.split_sequences()
-        self.featurize()
+        if args.features is not None:
+            self.featurize()
 
     def featurize(self):
         functions = {
@@ -188,22 +186,22 @@ class NBC:
                 assert target in object_mapping
                 return target
 
-        config = pd.read_csv(NBC_ROOT + self.args.config, sep='\t')
         features = {'train': {}, 'test': {}}
         for type in ['train', 'test']:
             for key, seq in self.sequences[type].items():
                 n = seq['step'].unique().shape[0]
                 features[type][key] = []
-                for _, entry in config.iterrows():
-                    target = parse_target(seq, entry['target'])
+                for entry in self.args.features:
+                    feature, target = entry.split(':')
+                    target = parse_target(seq, target)
                     if target is None:
                         features[type][key].append(np.zeros(n,))
                         continue
-                    if entry['feature'] in functions:
-                        feat = functions[entry['feature']](seq, target)
+                    if feature in functions:
+                        feat = functions[feature](seq, target)
                     else:
-                        assert entry['feature'] in seq.columns, entry['feature']
-                        feat = get_feature_direct(seq, target, entry['feature'])
+                        assert feature in seq.columns, feature
+                        feat = get_feature_direct(seq, target, feature)
                     assert feat.shape[0] == n or feat.ndim == 1, (feat.shape, n)
                     features[type][key].append(feat)
                 if features[type][key][0].ndim == 1:
@@ -213,7 +211,7 @@ class NBC:
                 else:
                     for i in range(len(features[type][key])):
                         assert features[type][key][i].ndim == 2
-                    features[type][key] = np.stack(features[type][key], axis=-1)
+                    features[type][key] = np.concatenate(features[type][key], axis=-1)
 
         self.features = features
 
@@ -249,7 +247,7 @@ class NBC:
             else:
                 assert sequencing[type] == 'session'
                 for session, group in self.df[type].groupby('session'):
-                    sequences[type][session] = group
+                    sequences[type][(session)] = group
         self.sequences = sequences
 
     def load(self):
@@ -278,9 +276,25 @@ class NBC:
         with open(tmp_path, 'wb+') as f:
             pickle.dump(self.df, f)
 
+    def get_vgg_embeddings(self):
+        vgg_embeddings = {'train': {}, 'test': {}}
+        for type in ['train', 'test']:
+            for key, df in self.sequences[type].items():
+                session = key[0]
+                embeddings = np.load(NBC_ROOT + 'release/{}/vgg_embeddings.npz'.format(session))
+                sort_indices = np.argsort(embeddings['steps'])
+                vgg_steps = embeddings['steps'][sort_indices]
+                vgg_z = embeddings['z'][sort_indices]
+                steps = df['step'].unique()
+                mask = np.isin(vgg_steps, steps)
+                assert np.sum(mask) == len(steps), (vgg_steps, steps)
+                vgg_embeddings[type][key] = vgg_z[mask]
+        return vgg_embeddings
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     NBC.add_args(parser)
     args = parser.parse_args()
 
-    NBC(args)
+    nbc = NBC(args)
+    embeddings = nbc.get_vgg_embeddings()
