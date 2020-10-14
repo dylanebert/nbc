@@ -172,6 +172,7 @@ class NBC:
 
     def featurize(self):
         functions = {
+            'one_hot_label': self.one_hot_label,
             'dist_to_head': dist_to_head,
             'avg_vel': avg_vel,
             'var_vel': var_vel,
@@ -290,6 +291,14 @@ class NBC:
                 assert np.sum(mask) == len(steps), (vgg_steps, steps)
                 vgg_embeddings[type][key] = vgg_z[mask]
         return vgg_embeddings
+
+    def one_hot_label(self, seq, target):
+        names = self.df['train']['name'].unique()
+        assert target in names, (names, target)
+        vocab = {v: k for k, v in enumerate(names)}
+        vec = np.zeros((len(names),))
+        vec[vocab[target]] = 1
+        return vec
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
