@@ -42,4 +42,4 @@ train_x = np.vstack(list(dataset.features['train'].values()))
 test_x = np.vstack(list(dataset.features['test'].values()))
 ```
 
-TODO: elaborate on available features, methods, and arguments
+See nbc.py for available properties, methods, and arguments.
