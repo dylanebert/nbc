@@ -1,6 +1,6 @@
 # New Brown Corpus
 
-This repository provides data and code to use the New Brown Corpus dataset. To view this dataset online, visit http://plunarlabcit.services.brown.edu/nbcapp
+This repository provides data and code to use the New Brown Corpus dataset. To view this dataset online, visit https://lunar.cs.brown.edu/nbc
 
 ## Dependencies
 - numpy
