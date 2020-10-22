@@ -46,4 +46,5 @@ See nbc.py for available properties, methods, and arguments.
 
 ## Notes
 
-The dataset will take a while to load for each new subsampling/dynamic_only argument configuration. However, temporary files will be stored in tmp/ to allow faster loading.
+- The dataset will take a while to load for each new subsampling/dynamic_only argument configuration. However, temporary files will be stored in tmp/ to allow faster loading.
+- Examples using the image data currently aren't available. However, image data follows the format {session_name}/{step_number}.png, and corresponds one-to-one to the spatial data.
