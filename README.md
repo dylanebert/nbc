@@ -43,3 +43,7 @@ test_x = np.vstack(list(dataset.features['test'].values()))
 ```
 
 See nbc.py for available properties, methods, and arguments.
+
+## Notes
+
+The dataset will take a while to load for each new subsampling/dynamic_only argument configuration. However, temporary files will be stored in tmp/ to allow faster loading.
