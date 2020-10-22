@@ -14,7 +14,7 @@ This repository provides data and code to use the New Brown Corpus dataset. To v
 - Clone this repository
 - In the project directory, download and extract:
   - https://plunarlabcit.services.brown.edu/release.7z
-  - https://plunarlabcit.services.brown.edu/images.7z
+  - https://plunarlabcit.services.brown.edu/images.7z (OPTIONAL)
 - Set your NBC_ROOT environment variable to this directory. For example on linux, run `export NBC_ROOT=/path/to/nbc`
 - If everything is set up correctly, you should be able to run nbc.py without error
 
