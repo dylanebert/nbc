@@ -37,37 +37,6 @@ target_tokens = [
     'stop_VERB',
     'push_VERB'
 ]
-object_mapping = {
-    'Apple': 'Apple',
-    'Ball': 'Ball',
-    'Banana': 'Banana',
-    'Bear': 'Bear',
-    'Book': 'Book',
-    'Bowl': 'Bowl',
-    'Cabinets': 'Cabinets',
-    'Chair': 'Chair',
-    'Clock': 'Clock',
-    'Counter': 'Counter',
-    'Cup': 'Cup',
-    'Dinosaur': 'Toy',
-    'Doll': 'Doll',
-    'Door': 'Door',
-    'Floor': 'Floor',
-    'Fork': 'Fork',
-    'Fridge': 'Fridge',
-    'Head': 'Head',
-    'Knife': 'Knife',
-    'Lamp': 'Lamp',
-    'LeftHand': 'LeftHand',
-    'Microwave': 'Microwave',
-    'Plant': 'Plant',
-    'RightHand': 'RightHand',
-    'Spoon': 'Spoon',
-    'Toy': 'Toy',
-    'Trash_Bin': 'Trash',
-    'Wall': 'Wall',
-    'Window': 'Window'
-}
 
 def verify_paths():
     for type in ['train', 'test']:
@@ -184,7 +153,6 @@ class NBC:
             if target == 'most_moving':
                 return get_most_moving(seq)
             else:
-                assert target in object_mapping
                 return target
 
         features = {'train': {}, 'test': {}}
