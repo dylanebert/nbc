@@ -123,6 +123,17 @@ def avg_rel(seq, target):
     avg_pos = rows[['relPosX', 'relPosY', 'relPosZ']].to_numpy()
     return np.mean(avg_pos, axis=0)
 
+def speed(seq, target):
+    rows = seq[seq['name'] == target]
+    speed = rows.apply(lambda row: row['velX'] * row['velX'] + row['velY'] * row['velY'] + row['velZ'] * row['velZ'], axis=1).to_numpy()
+    return speed[:, np.newaxis]
+
+def moving(seq, target):
+    rows = seq[seq['name'] == target]
+    speed = rows.apply(lambda row: row['velX'] * row['velX'] + row['velY'] * row['velY'] + row['velZ'] * row['velZ'], axis=1).to_numpy()
+    speed[speed > 0] = 1
+    return speed[:, np.newaxis]
+
 class NBC:
     @classmethod
     def add_args(cls, parser):
@@ -131,6 +142,8 @@ class NBC:
         parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session'], default='token_aligned')
         parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session'], default='chunked')
         parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving')
+        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim'], default='nonzero_any')
+        parser.add_argument('--trim', help='whether to trim long idle segments', type=bool, default=True)
 
     def __init__(self, args):
         self.args = args
@@ -138,6 +151,8 @@ class NBC:
         self.split_sequences()
         if args.features is not None:
             self.featurize()
+            self.generate_labels()
+            self.trim()
 
     def featurize(self):
         functions = {
@@ -146,7 +161,9 @@ class NBC:
             'avg_vel': avg_vel,
             'var_vel': var_vel,
             'traj': traj,
-            'avg_rel': avg_rel
+            'avg_rel': avg_rel,
+            'speed': speed,
+            'moving': moving
         }
 
         def parse_target(seq, target):
@@ -184,10 +201,49 @@ class NBC:
 
         self.features = features
 
+    def generate_labels(self):
+        labels = {'train': {}, 'test': {}}
+        for type in ['train', 'test']:
+            if self.args.label_method == 'nonzero_any':
+                for key in self.features[type].keys():
+                    feat = self.features[type][key]
+                    labels_ = np.any(np.abs(feat) > 0, axis=1).astype(int)
+                    labels[type][key] = labels_
+                self.n_classes = 2
+            else:
+                assert self.args.label_method == 'nonzero_by_dim'
+                for key in self.features[type].keys():
+                    feat = self.features[type][key]
+                    labels_ = np.zeros((feat.shape[0],))
+                    nonzero = (np.abs(feat) > 0)
+                    labels_[np.any(nonzero, axis=1)] = (np.argmax(nonzero, axis=1) + 1)[np.any(nonzero, axis=1)]
+                    labels[type][key] = labels_
+                self.n_classes = next(iter(self.features[type].values())).shape[-1] + 1
+        self.labels = labels
+
+    def trim(self):
+        for type in ['train', 'test']:
+            for key in list(self.features[type].keys()):
+                feat = self.features[type][key]
+                labels = self.labels[type][key]
+                steps = self.steps[type][key]
+                if np.all(labels == 0):
+                    del self.features[type][key]
+                    del self.labels[type][key]
+                    del self.steps[type][key]
+                else:
+                    mask = labels.copy()
+                    for i in range(1, max(2, 180 // self.args.subsample)): #2 seconds of trim padding
+                        mask += np.roll(labels, i) + np.roll(labels, -i)
+                    self.labels[type][key] = labels[mask > 0]
+                    self.features[type][key] = feat[mask > 0, :]
+                    self.steps[type][key] = steps[mask > 0]
+
     def split_sequences(self):
         #split dataset into sequences using one of three methods
         sequencing = {'train': self.args.train_sequencing, 'test': self.args.test_sequencing}
         sequences = {'train': {}, 'test': {}}
+        steps = {'train': {}, 'test': {}}
         for type in ['train', 'test']:
             if sequencing[type] == 'token_aligned':
                 words = pd.read_json(NBC_ROOT + 'words.json', orient='index')
@@ -204,6 +260,7 @@ class NBC:
                         rows = group[group['step'].isin(steps)]
                         assert len(rows) > 0, (group['step'], steps)
                         sequences[type][(session, row['start_step'], row['token'])] = rows
+                        sequences[type][(session, row['start_step'], row['token'])] = rows['step'].unique()
             elif sequencing[type] == 'chunked':
                 for participant, task in itertools.product(participants[type], range(1, 7)):
                     session = '{}_task{}'.format(participant, task)
@@ -213,11 +270,14 @@ class NBC:
                         rows = group[group['step'].isin(range(step, step + 450))]
                         assert len(rows) > 0, (group['step'], steps)
                         sequences[type][(session, step)] = rows
+                        steps[type][(session, step)] = rows['step'].unique()
             else:
                 assert sequencing[type] == 'session'
                 for session, group in self.df[type].groupby('session'):
                     sequences[type][(session)] = group
+                    steps[type][(session)] = group['step'].unique()
         self.sequences = sequences
+        self.steps = steps
 
     def load(self):
         #load from tmp file if possible
@@ -274,4 +334,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     nbc = NBC(args)
-    embeddings = nbc.get_vgg_embeddings()
+    #embeddings = nbc.get_vgg_embeddings()
