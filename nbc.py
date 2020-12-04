@@ -59,11 +59,24 @@ def subsample(df, s):
     df = df[df['step'].isin(mask)]
     return df
 
-def get_most_moving(seq):
+def get_most_moving_obj(seq):
     max_motion = 0
     most_moving = None
     for id, rows in seq.groupby('id'):
         if rows.iloc[0]['name'] in ['Head', 'LeftHand', 'RightHand']:
+            continue
+        pos = rows[['posX', 'posY', 'posZ']].to_numpy()
+        motion = np.sum(np.var(pos, axis=0))
+        if motion > max_motion:
+            max_motion = motion
+            most_moving = rows.iloc[0]['name']
+    return most_moving
+
+def get_most_moving_hand(seq):
+    max_motion = 0
+    most_moving = None
+    for id, rows in seq.groupby('id'):
+        if rows.iloc[0]['name'] not in ['LeftHand', 'RightHand']:
             continue
         pos = rows[['posX', 'posY', 'posZ']].to_numpy()
         motion = np.sum(np.var(pos, axis=0))
@@ -139,10 +152,10 @@ class NBC:
     def add_args(cls, parser):
         parser.add_argument('--subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=90)
         parser.add_argument('--dynamic_only', help='filter to only objects that can move', type=bool, default=True)
-        parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session'], default='token_aligned')
-        parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session'], default='chunked')
-        parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving')
-        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim'], default='nonzero_any')
+        parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='token_aligned')
+        parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
+        parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
+        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions'], default='nonzero_any')
         parser.add_argument('--trim', help='whether to trim long idle segments', type=bool, default=True)
 
     def __init__(self, args):
@@ -167,9 +180,12 @@ class NBC:
         }
 
         def parse_target(seq, target):
-            if target == 'most_moving':
-                return get_most_moving(seq)
+            if target == 'most_moving_obj':
+                return get_most_moving_obj(seq)
+            elif target == 'most_moving_hand':
+                return get_most_moving_hand(seq)
             else:
+                assert target in self.df['train']['name'].unique(), target
                 return target
 
         features = {'train': {}, 'test': {}}
@@ -204,7 +220,23 @@ class NBC:
     def generate_labels(self):
         labels = {'train': {}, 'test': {}}
         for type in ['train', 'test']:
-            if self.args.label_method == 'nonzero_any':
+            if self.args.label_method == 'actions':
+                actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
+                for key, steps in self.steps[type].items():
+                    session = key[0]
+                    group = actions[actions['session'] == session]
+                    feat = self.features[type][key]
+                    labels_ = np.zeros((feat.shape[0],))
+                    actions_ = actions[actions['session'] == session]
+                    for _, action in actions_.iterrows():
+                        steps_ = np.arange(action['start_step'], action['end_step'])
+                        for step in steps_:
+                            if step in steps:
+                                idx = (steps == step).argmax()
+                                labels_[idx] = ['reach', 'pick', 'put', 'retract'].index(action['action']) + 1
+                    labels[type][key] = labels_
+                self.n_classes = 5
+            elif self.args.label_method == 'nonzero_any':
                 for key in self.features[type].keys():
                     feat = self.features[type][key]
                     labels_ = np.any(np.abs(feat) > 0, axis=1).astype(int)
@@ -256,26 +288,39 @@ class NBC:
                     for _, row in tokens_.iterrows():
                         if row['start_step'] + 450 > group.iloc[-1]['step']:
                             continue
-                        steps = np.arange(row['start_step'], row['start_step'] + 450)
-                        rows = group[group['step'].isin(steps)]
-                        assert len(rows) > 0, (group['step'], steps)
+                        steps_ = np.arange(row['start_step'], row['start_step'] + 450)
+                        rows = group[group['step'].isin(steps_)]
+                        assert len(rows) > 0, (group['step'], steps_)
                         sequences[type][(session, row['start_step'], row['token'])] = rows
-                        sequences[type][(session, row['start_step'], row['token'])] = rows['step'].unique()
+                        steps[type][(session, row['start_step'], row['token'])] = rows['step'].unique()
             elif sequencing[type] == 'chunked':
                 for participant, task in itertools.product(participants[type], range(1, 7)):
                     session = '{}_task{}'.format(participant, task)
                     group = self.df[type][self.df[type]['session'] == session]
-                    steps = group['step'].unique()
-                    for step in np.arange(steps[0], steps[-1] - 450, 450):
+                    steps_ = group['step'].unique()
+                    for step in np.arange(steps_[0], steps_[-1] - 450, 450):
                         rows = group[group['step'].isin(range(step, step + 450))]
-                        assert len(rows) > 0, (group['step'], steps)
+                        assert len(rows) > 0, (group['step'], steps_)
                         sequences[type][(session, step)] = rows
                         steps[type][(session, step)] = rows['step'].unique()
+            elif sequencing[type] == 'actions':
+                actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
+                for participant, task in itertools.product(participants[type], range(1, 7)):
+                    session = '{}_task{}'.format(participant, task)
+                    group = self.df[type][self.df[type]['session'] == session]
+                    actions_ = actions[actions['session'] == session]
+                    for idx, row in actions_.iterrows():
+                        action = row['action']; target = row['target']; hand = row['hand']
+                        steps_ = np.arange(row['start_step'], row['end_step'])
+                        rows = group[group['step'].isin(steps_)]
+                        assert len(rows) > 0, (group['step'], steps_, 'subsampling may be too high')
+                        sequences[type][(session, action, target, hand, idx)] = rows
+                        steps[type][(session, action, target, hand, idx)] = rows['step'].unique()
             else:
                 assert sequencing[type] == 'session'
                 for session, group in self.df[type].groupby('session'):
-                    sequences[type][(session)] = group
-                    steps[type][(session)] = group['step'].unique()
+                    sequences[type][(session,)] = group
+                    steps[type][(session,)] = group['step'].unique()
         self.sequences = sequences
         self.steps = steps
 
