@@ -13,7 +13,8 @@ NBC_ROOT = os.environ['NBC_ROOT']
 participants = {
     'train': ['1_1a', '2_2a', '5_1c', '6_2c', \
         '7_1a', '8_2a', '9_1b', '10_2b', '11_1c', '12_2c', \
-        '13_1a', '14_2a', '15_1b', '16_2b', '17_1c', '18_2c'],
+        '13_1a', '14_2a', '15_1b', '16_2b'],
+    'dev': ['17_1c', '18_2c'],
     'test': ['3_1b', '4_2b']
 }
 target_tokens = [
@@ -39,7 +40,7 @@ target_tokens = [
 ]
 
 def verify_paths():
-    for type in ['train', 'test']:
+    for type in participants.keys():
         for participant, task in itertools.product(participants[type], range(1, 7)):
             path = NBC_ROOT + 'release/{}_task{}/spatial.json'.format(participant, task)
             assert os.path.exists(path), '{} does not exists'.format(path)
@@ -153,10 +154,11 @@ class NBC:
         parser.add_argument('--subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=90)
         parser.add_argument('--dynamic_only', help='filter to only objects that can move', type=bool, default=True)
         parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='token_aligned')
+        parser.add_argument('--dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
         parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
         parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
         parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions'], default='nonzero_any')
-        parser.add_argument('--trim', help='whether to trim long idle segments', type=bool, default=True)
+        parser.add_argument('--trim', help='whether to trim long idle segments', action='store_true')
 
     def __init__(self, args):
         self.args = args
@@ -165,7 +167,8 @@ class NBC:
         if args.features is not None:
             self.featurize()
             self.generate_labels()
-            self.trim()
+            if args.trim:
+                self.trim()
 
     def featurize(self):
         functions = {
@@ -188,8 +191,8 @@ class NBC:
                 assert target in self.df['train']['name'].unique(), target
                 return target
 
-        features = {'train': {}, 'test': {}}
-        for type in ['train', 'test']:
+        features = {'train': {}, 'dev': {}, 'test': {}}
+        for type in participants.keys():
             for key, seq in self.sequences[type].items():
                 n = seq['step'].unique().shape[0]
                 features[type][key] = []
@@ -218,8 +221,8 @@ class NBC:
         self.features = features
 
     def generate_labels(self):
-        labels = {'train': {}, 'test': {}}
-        for type in ['train', 'test']:
+        labels = {'train': {}, 'dev': {}, 'test': {}}
+        for type in participants.keys():
             if self.args.label_method == 'actions':
                 actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
                 for key, steps in self.steps[type].items():
@@ -254,7 +257,7 @@ class NBC:
         self.labels = labels
 
     def trim(self):
-        for type in ['train', 'test']:
+        for type in participants.keys():
             for key in list(self.features[type].keys()):
                 feat = self.features[type][key]
                 labels = self.labels[type][key]
@@ -265,7 +268,7 @@ class NBC:
                     del self.steps[type][key]
                 else:
                     mask = labels.copy()
-                    for i in range(1, max(2, 180 // self.args.subsample)): #2 seconds of trim padding
+                    for i in range(1, 5): #5 frames of trim padding
                         mask += np.roll(labels, i) + np.roll(labels, -i)
                     self.labels[type][key] = labels[mask > 0]
                     self.features[type][key] = feat[mask > 0, :]
@@ -273,10 +276,10 @@ class NBC:
 
     def split_sequences(self):
         #split dataset into sequences using one of three methods
-        sequencing = {'train': self.args.train_sequencing, 'test': self.args.test_sequencing}
-        sequences = {'train': {}, 'test': {}}
-        steps = {'train': {}, 'test': {}}
-        for type in ['train', 'test']:
+        sequencing = {'train': self.args.train_sequencing, 'dev': self.args.dev_sequencing, 'test': self.args.test_sequencing}
+        sequences = {'train': {}, 'dev': {}, 'test': {}}
+        steps = {'train': {}, 'dev': {}, 'test': {}}
+        for type in participants.keys():
             if sequencing[type] == 'token_aligned':
                 words = pd.read_json(NBC_ROOT + 'words.json', orient='index')
                 words['token'] = words.apply(lambda row: row['lemma'] + '_' + row['pos'], axis=1)
@@ -333,8 +336,8 @@ class NBC:
                 return
 
         #otherwise, build dataset from disk and save
-        self.df = {'train': [], 'test': []}
-        for type in ['train', 'test']:
+        self.df = {'train': [], 'dev': [], 'test': []}
+        for type in participants.keys():
             print('Loading {} data'.format(type))
             for participant, task in tqdm(itertools.product(participants[type], range(1, 7)), total=len(participants[type] * 6)):
                 session = '{}_task{}'.format(participant, task)
@@ -351,8 +354,8 @@ class NBC:
             pickle.dump(self.df, f)
 
     def get_vgg_embeddings(self):
-        vgg_embeddings = {'train': {}, 'test': {}}
-        for type in ['train', 'test']:
+        vgg_embeddings = {'train': {}, 'dev': {}, 'test': {}}
+        for type in participants.keys():
             for key, df in self.sequences[type].items():
                 session = key[0]
                 embeddings = np.load(NBC_ROOT + 'release/{}/vgg_embeddings.npz'.format(session))
