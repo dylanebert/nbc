@@ -157,7 +157,7 @@ class NBC:
         parser.add_argument('--dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
         parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
         parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
-        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions'], default='nonzero_any')
+        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', 'actions_rhand_apple'], default='nonzero_any')
         parser.add_argument('--trim', help='whether to trim long idle segments', action='store_true')
 
     def __init__(self, args):
@@ -223,8 +223,10 @@ class NBC:
     def generate_labels(self):
         labels = {'train': {}, 'dev': {}, 'test': {}}
         for type in participants.keys():
-            if self.args.label_method == 'actions':
+            if self.args.label_method == 'actions' or self.args.label_method == 'actions_rhand_apple':
                 actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
+                if self.args.label_method == 'actions_rhand_apple':
+                    actions = actions[(actions['target'] == 'Apple') & (actions['hand'] == 'RightHand')]
                 for key, steps in self.steps[type].items():
                     session = key[0]
                     group = actions[actions['session'] == session]
