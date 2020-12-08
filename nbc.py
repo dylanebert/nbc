@@ -158,7 +158,7 @@ class NBC:
         parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
         parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
         parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', 'actions_rhand_apple'], default='nonzero_any')
-        parser.add_argument('--trim', help='whether to trim long idle segments', action='store_true')
+        parser.add_argument('--trim', help='idle padding to allow around actions, -1 to disable', type=int, default=-1)
 
     def __init__(self, args):
         self.args = args
@@ -167,8 +167,7 @@ class NBC:
         if args.features is not None:
             self.featurize()
             self.generate_labels()
-            if args.trim:
-                self.trim()
+            self.trim()
 
     def featurize(self):
         functions = {
@@ -184,12 +183,20 @@ class NBC:
 
         def parse_target(seq, target):
             if target == 'most_moving_obj':
-                return get_most_moving_obj(seq)
+                return [get_most_moving_obj(seq)]
             elif target == 'most_moving_hand':
-                return get_most_moving_hand(seq)
+                return [get_most_moving_hand(seq)]
+            elif target == 'objs':
+                objs1 = self.df['train'][self.df['train']['session'] == '1_1a_task1']['name'].unique()
+                objs2 = self.df['train'][self.df['train']['session'] == '2_2a_task1']['name'].unique()
+                objs = np.intersect1d(objs1, objs2)
+                objs = objs[~np.isin(objs, ['LeftHand', 'RightHand', 'Head'])]
+                return objs
+            elif target == 'hands':
+                return ['LeftHand', 'RightHand']
             else:
                 assert target in self.df['train']['name'].unique(), target
-                return target
+                return [target]
 
         features = {'train': {}, 'dev': {}, 'test': {}}
         for type in participants.keys():
@@ -199,16 +206,18 @@ class NBC:
                 for entry in self.args.features:
                     feature, target = entry.split(':')
                     target = parse_target(seq, target)
-                    if target is None:
-                        features[type][key].append(np.zeros(n,))
-                        continue
+                    feat = []
                     if feature in functions:
-                        feat = functions[feature](seq, target)
+                        for target_ in target:
+                            feat_ = functions[feature](seq, target_)
+                            assert feat_.shape[0] == n or feat_.ndim == 1, (feat_.shape, n)
+                            features[type][key].append(feat_)
                     else:
                         assert feature in seq.columns, feature
-                        feat = get_feature_direct(seq, target, feature)
-                    assert feat.shape[0] == n or feat.ndim == 1, (feat.shape, n)
-                    features[type][key].append(feat)
+                        for target_ in target:
+                            feat_ = get_feature_direct(seq, target_, features)
+                            assert feat_.shape[0] == n or feat_.ndim == 1, (feat_.shape, n)
+                            features[type][key].append(feat_)
                 if features[type][key][0].ndim == 1:
                     for i in range(len(features[type][key])):
                         assert features[type][key][i].ndim == 1
@@ -269,8 +278,10 @@ class NBC:
                     del self.labels[type][key]
                     del self.steps[type][key]
                 else:
+                    if self.args.trim < 0:
+                        continue
                     mask = labels.copy()
-                    for i in range(1, 5): #5 frames of trim padding
+                    for i in range(1, self.args.trim):
                         mask += np.roll(labels, i) + np.roll(labels, -i)
                     self.labels[type][key] = labels[mask > 0]
                     self.features[type][key] = feat[mask > 0, :]
@@ -384,4 +395,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     nbc = NBC(args)
+    print(next(iter(nbc.labels['test'].values())))
+    print(next(iter(nbc.features['test'].values())))
+    print(next(iter(nbc.features['test'].values())).shape)
     #embeddings = nbc.get_vgg_embeddings()
