@@ -215,7 +215,7 @@ class NBC:
                     else:
                         assert feature in seq.columns, feature
                         for target_ in target:
-                            feat_ = get_feature_direct(seq, target_, features)
+                            feat_ = get_feature_direct(seq, target_, feature)
                             assert feat_.shape[0] == n or feat_.ndim == 1, (feat_.shape, n)
                             features[type][key].append(feat_)
                 if features[type][key][0].ndim == 1:
