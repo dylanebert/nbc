@@ -172,6 +172,7 @@ class NBC:
         self.args = args
         assert args.features is not None, 'specify one or more features'
         if self.try_load_cached():
+            print('loaded cached data based on args')
             return
         self.load()
         self.split_sequences()
