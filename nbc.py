@@ -5,6 +5,7 @@ import pickle
 import os
 from tqdm import tqdm
 import argparse
+from sklearn import preprocessing
 
 assert 'NBC_ROOT' in os.environ, 'set NBC_ROOT envvar'
 NBC_ROOT = os.environ['NBC_ROOT']
@@ -159,6 +160,7 @@ class NBC:
         parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
         parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', 'actions_rhand_apple'], default='nonzero_any')
         parser.add_argument('--trim', help='idle padding to allow around actions, -1 to disable', type=int, default=-1)
+        parser.add_argument('--preprocess', help='apply preprocessing to features', action='store_true')
 
     def __init__(self, args):
         self.args = args
@@ -166,8 +168,25 @@ class NBC:
         self.split_sequences()
         if args.features is not None:
             self.featurize()
+            if args.preprocess:
+                self.preprocess()
             self.generate_labels()
             self.trim()
+
+    def preprocess(self):
+        x_train = np.vstack(list(self.features['train'].values()))
+        scaler = preprocessing.MinMaxScaler().fit(x_train)
+        x_train = scaler.transform(x_train)
+        x_dev = scaler.transform(np.vstack(list(self.features['dev'].values())))
+        x_test = scaler.transform(np.vstack(list(self.features['test'].values())))
+        for type in ['train', 'dev', 'test']:
+            x = scaler.transform(np.vstack(list(self.features[type].values())))
+            idx = 0
+            for key in self.features[type].keys():
+                length = self.features[type][key].shape[0]
+                self.features[type][key] = x[idx:idx+length]
+                idx += length
+            assert idx == x.shape[0]
 
     def featurize(self):
         functions = {
