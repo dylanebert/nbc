@@ -6,6 +6,9 @@ import os
 from tqdm import tqdm
 import argparse
 from sklearn import preprocessing
+import json
+import uuid
+import ast
 
 assert 'NBC_ROOT' in os.environ, 'set NBC_ROOT envvar'
 NBC_ROOT = os.environ['NBC_ROOT']
@@ -45,6 +48,9 @@ def verify_paths():
         for participant, task in itertools.product(participants[type], range(1, 7)):
             path = NBC_ROOT + 'release/{}_task{}/spatial.json'.format(participant, task)
             assert os.path.exists(path), '{} does not exists'.format(path)
+    if not os.path.exists(NBC_ROOT + 'tmp/cached/'):
+        os.makedirs(NBC_ROOT + 'tmp/cached/')
+
 verify_paths()
 #------
 
@@ -164,14 +170,66 @@ class NBC:
 
     def __init__(self, args):
         self.args = args
+        assert args.features is not None, 'specify one or more features'
+        if self.try_load_cached():
+            return
         self.load()
         self.split_sequences()
-        if args.features is not None:
-            self.featurize()
-            if args.preprocess:
-                self.preprocess()
-            self.generate_labels()
-            self.trim()
+        self.featurize()
+        if args.preprocess:
+            self.preprocess()
+        self.generate_labels()
+        self.trim()
+        self.cache()
+
+    def try_load_cached(self):
+        args_dict = json.dumps(vars(self.args))
+        key_path = NBC_ROOT + 'tmp/cached/keys.json'
+        if not os.path.exists(key_path):
+            return False
+        with open(key_path) as f:
+            keys = json.load(f)
+        if args_dict not in keys:
+            return False
+        fid = keys[args_dict]
+        fpath = NBC_ROOT + 'tmp/cached/{}.json'.format(fid)
+        with open(fpath) as f:
+            data = json.load(f)
+        self.features = {}; self.labels = {}; self.steps = {}
+        for type in ['train', 'dev', 'test']:
+            self.features[type] = {}; self.labels[type] = {}; self.steps[type] = {}
+            for key in data[type]['features'].keys():
+                key_tuple = ast.literal_eval(key)
+                self.features[type][key_tuple] = np.array(data[type]['features'][key])
+                self.labels[type][key_tuple] = np.array(data[type]['labels'][key])
+                self.steps[type][key_tuple] = np.array(data[type]['steps'][key])
+        return True
+
+    def cache(self):
+        args_dict = json.dumps(vars(self.args))
+        key_path = NBC_ROOT + 'tmp/cached/keys.json'
+        if os.path.exists(key_path):
+            with open(key_path) as f:
+                keys = json.load(f)
+        else:
+            keys = {}
+        if args_dict in keys:
+            print('already cached')
+            return
+        fid = str(uuid.uuid1())
+        savepath = NBC_ROOT + 'tmp/cached/{}.json'.format(fid)
+        serialized = {}
+        for type in ['train', 'dev', 'test']:
+            serialized[type] = {'features': {}, 'labels': {}, 'steps': {}}
+            for key in self.features[type].keys():
+                serialized[type]['features'][str(key)] = self.features[type][key].tolist()
+                serialized[type]['labels'][str(key)] = self.labels[type][key].tolist()
+                serialized[type]['steps'][str(key)] = self.steps[type][key].tolist()
+        with open(savepath, 'w+') as f:
+            json.dump(serialized, f)
+        keys[args_dict] = fid
+        with open(key_path, 'w+') as f:
+            json.dump(keys, f)
 
     def preprocess(self):
         x_train = np.vstack(list(self.features['train'].values()))
@@ -184,7 +242,7 @@ class NBC:
             idx = 0
             for key in self.features[type].keys():
                 length = self.features[type][key].shape[0]
-                self.features[type][key] = x[idx:idx+length]
+                self.features[type][key] = np.nan_to_num(x[idx:idx+length])
                 idx += length
             assert idx == x.shape[0]
 
