@@ -172,7 +172,7 @@ class NBC:
         self.args = args
         assert args.features is not None, 'specify one or more features'
         if self.try_load_cached():
-            print('loaded cached data based on args')
+            print('loaded cached data from args')
             return
         self.load()
         self.split_sequences()
@@ -215,7 +215,6 @@ class NBC:
         else:
             keys = {}
         if args_dict in keys:
-            print('already cached')
             return
         fid = str(uuid.uuid1())
         savepath = NBC_ROOT + 'tmp/cached/{}.json'.format(fid)
@@ -231,6 +230,7 @@ class NBC:
         keys[args_dict] = fid
         with open(key_path, 'w+') as f:
             json.dump(keys, f)
+        print('cached data')
 
     def preprocess(self):
         x_train = np.vstack(list(self.features['train'].values()))
