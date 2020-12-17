@@ -163,15 +163,17 @@ class NBC:
         parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='token_aligned')
         parser.add_argument('--dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
         parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
+        parser.add_argument('--chunk_size', help='chunk size in steps if using chunked sequencing', type=int, default=10)
         parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
-        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', 'actions_rhand_apple'], default='nonzero_any')
+        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', 'actions_rhand_apple', 'pick_rhand_apple'], default='nonzero_any')
         parser.add_argument('--trim', help='idle padding to allow around actions, -1 to disable', type=int, default=-1)
         parser.add_argument('--preprocess', help='apply preprocessing to features', action='store_true')
+        parser.add_argument('--recache', help='override old cached data', action='store_true')
 
     def __init__(self, args):
         self.args = args
         assert args.features is not None, 'specify one or more features'
-        if self.try_load_cached():
+        if not args.recache and self.try_load_cached():
             print('loaded cached data from args')
             return
         self.load()
@@ -248,6 +250,7 @@ class NBC:
             assert idx == x.shape[0]
 
     def featurize(self):
+        print('featurizing')
         functions = {
             'one_hot_label': self.one_hot_label,
             'dist_to_head': dist_to_head,
@@ -278,7 +281,7 @@ class NBC:
 
         features = {'train': {}, 'dev': {}, 'test': {}}
         for type in participants.keys():
-            for key, seq in self.sequences[type].items():
+            for key, seq in tqdm(list(self.sequences[type].items())):
                 n = seq['step'].unique().shape[0]
                 features[type][key] = []
                 for entry in self.args.features:
@@ -308,24 +311,29 @@ class NBC:
         self.features = features
 
     def generate_labels(self):
+        print('generating labels')
         labels = {'train': {}, 'dev': {}, 'test': {}}
         for type in participants.keys():
-            if self.args.label_method == 'actions' or self.args.label_method == 'actions_rhand_apple':
+            if self.args.label_method in ['actions', 'actions_rhand_apple', 'pick_rhand_apple']:
                 actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
+                action_labels = ['reach', 'pick', 'put', 'retract']
                 if self.args.label_method == 'actions_rhand_apple':
                     actions = actions[(actions['target'] == 'Apple') & (actions['hand'] == 'RightHand')]
+                elif self.args.label_method == 'pick_rhand_apple':
+                    actions = actions[(actions['target'] == 'Apple') & (actions['hand'] == 'RightHand') & (actions['action'] == 'pick')]
+                    action_labels = ['pick']
                 for key, steps in self.steps[type].items():
                     session = key[0]
                     group = actions[actions['session'] == session]
                     feat = self.features[type][key]
-                    labels_ = np.zeros((feat.shape[0],))
+                    labels_ = np.ones((feat.shape[0],))
                     actions_ = actions[actions['session'] == session]
                     for _, action in actions_.iterrows():
                         steps_ = np.arange(action['start_step'], action['end_step'])
                         for step in steps_:
                             if step in steps:
                                 idx = (steps == step).argmax()
-                                labels_[idx] = ['reach', 'pick', 'put', 'retract'].index(action['action']) + 1
+                                labels_[idx] = action_labels.index(action['action']) + 2
                     labels[type][key] = labels_
                 self.n_classes = 5
             elif self.args.label_method == 'nonzero_any':
@@ -367,6 +375,7 @@ class NBC:
 
     def split_sequences(self):
         #split dataset into sequences using one of three methods
+        print('splitting sequences')
         sequencing = {'train': self.args.train_sequencing, 'dev': self.args.dev_sequencing, 'test': self.args.test_sequencing}
         sequences = {'train': {}, 'dev': {}, 'test': {}}
         steps = {'train': {}, 'dev': {}, 'test': {}}
@@ -392,11 +401,12 @@ class NBC:
                     session = '{}_task{}'.format(participant, task)
                     group = self.df[type][self.df[type]['session'] == session]
                     steps_ = group['step'].unique()
-                    for step in np.arange(steps_[0], steps_[-1] - 450, 450):
-                        rows = group[group['step'].isin(range(step, step + 450))]
-                        assert len(rows) > 0, (group['step'], steps_)
-                        sequences[type][(session, step)] = rows
-                        steps[type][(session, step)] = rows['step'].unique()
+                    for i in range(0, steps_.shape[0] - self.args.chunk_size, self.args.chunk_size):
+                        start_step, end_step = steps_[i], steps_[i + self.args.chunk_size]
+                        rows = group[group['step'].isin(range(start_step, end_step))]
+                        assert len(rows['step'].unique()) == self.args.chunk_size, (len(rows['step'].unique()), self.args.chunk_size)
+                        sequences[type][(session, steps_[i])] = rows
+                        steps[type][(session, steps_[i])] = rows['step'].unique()
             elif sequencing[type] == 'actions':
                 actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
                 for participant, task in itertools.product(participants[type], range(1, 7)):
