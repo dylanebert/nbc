@@ -68,33 +68,26 @@ def subsample(df, s):
     return df
 
 def get_most_moving_obj(seq):
-    max_motion = 0
-    most_moving = None
-    for id, rows in seq.groupby('id'):
-        if rows.iloc[0]['name'] in ['Head', 'LeftHand', 'RightHand']:
-            continue
-        pos = rows[['posX', 'posY', 'posZ']].to_numpy()
-        motion = np.sum(np.var(pos, axis=0))
-        if motion > max_motion:
-            max_motion = motion
-            most_moving = rows.iloc[0]['name']
+    most_moving = []
+    for step, group in seq.groupby('step'):
+        group = group[~group['name'].isin(['Head', 'LeftHand', 'RightHand'])]
+        names = group['name'].values
+        speed = np.linalg.norm(group[['velX', 'velY', 'velZ']].to_numpy(), axis=1)
+        most_moving.append((step, names[np.argmax(speed)]))
     return most_moving
 
 def get_most_moving_hand(seq):
-    max_motion = 0
-    most_moving = None
-    for id, rows in seq.groupby('id'):
-        if rows.iloc[0]['name'] not in ['LeftHand', 'RightHand']:
-            continue
-        pos = rows[['posX', 'posY', 'posZ']].to_numpy()
-        motion = np.sum(np.var(pos, axis=0))
-        if motion > max_motion:
-            max_motion = motion
-            most_moving = rows.iloc[0]['name']
+    most_moving = []
+    for step, group in seq.groupby('step'):
+        group = group[group['name'].isin(['LeftHand', 'RightHand'])]
+        names = group['name'].values
+        speed = np.linalg.norm(group[['velX', 'velY', 'velZ']].to_numpy(), axis=1)
+        most_moving.append((step, names[np.argmax(speed)]))
     return most_moving
 
 def get_feature_direct(seq, target, feat):
-    return seq[seq['name'] == target][feat].to_numpy()[:, np.newaxis]
+    rows = parse_rows(seq, target)
+    return rows[feat].to_numpy()[:, np.newaxis]
 
 def reparameterize(vec):
     start = vec[0]; end = vec[-1]
@@ -110,17 +103,17 @@ def dist_to_head(seq, target):
     return reparameterize(dist)
 
 def avg_vel(seq, target):
-    rows = seq[seq['name'] == target]
+    rows = parse_rows(seq, target)
     avg_vel = np.mean(rows[['velX', 'velY', 'velZ']].to_numpy(), axis=1)
     return reparameterize(avg_vel)
 
 def var_vel(seq, target):
-    rows = seq[seq['name'] == target]
+    rows = parse_rows(seq, target)
     var_vel = np.var(rows[['velX', 'velY', 'velZ']].to_numpy(), axis=1)
     return np.mean(var_vel)[np.newaxis]
 
 def traj(seq, target):
-    rows = seq[seq['name'] == target]
+    rows = parse_rows(seq, target)
     pos = rows[['posX', 'posY', 'posZ']].to_numpy()
     start = pos[0]; end = pos[-1]
     peak = np.max(pos, axis=0); trough = np.min(pos, axis=0)
@@ -140,29 +133,52 @@ def traj(seq, target):
     return np.array(feat)
 
 def avg_rel(seq, target):
-    rows = seq[seq['name'] == target]
+    rows = parse_rows(seq, target)
     avg_pos = rows[['relPosX', 'relPosY', 'relPosZ']].to_numpy()
     return np.mean(avg_pos, axis=0)
 
 def speed(seq, target):
-    rows = seq[seq['name'] == target]
+    rows = parse_rows(seq, target)
     speed = rows.apply(lambda row: row['velX'] * row['velX'] + row['velY'] * row['velY'] + row['velZ'] * row['velZ'], axis=1).to_numpy()
     return speed[:, np.newaxis]
 
 def moving(seq, target):
-    rows = seq[seq['name'] == target]
+    rows = parse_rows(seq, target)
     speed = rows.apply(lambda row: row['velX'] * row['velX'] + row['velY'] * row['velY'] + row['velZ'] * row['velZ'], axis=1).to_numpy()
     speed[speed > 0] = 1
     return speed[:, np.newaxis]
 
+def dist_to_rhand(seq, target):
+    rows = parse_rows(seq, target)
+    rhand_pos = seq[seq['name'] == 'RightHand'][['posX', 'posY', 'posZ']].to_numpy()
+    target_pos = rows[['posX', 'posY', 'posZ']].to_numpy()
+    dist = np.linalg.norm(target_pos - rhand_pos, axis=1)
+    return dist[:, np.newaxis]
+
+def dist_to_lhand(seq, target):
+    rows = parse_rows(seq, target)
+    rhand_pos = seq[seq['name'] == 'LeftHand'][['posX', 'posY', 'posZ']].to_numpy()
+    target_pos = rows[['posX', 'posY', 'posZ']].to_numpy()
+    dist = np.linalg.norm(target_pos - rhand_pos, axis=1)
+    return dist[:, np.newaxis]
+
+def parse_rows(seq, target):
+    if isinstance(target, list):
+        seq['idx'] = seq.apply(lambda row: (row['step'], row['name']), axis=1)
+        seq = seq.set_index('idx', drop=True)
+        rows = seq.loc[target]
+    else:
+        rows = seq[seq['name'] == target]
+    return rows
+
 class NBC:
     @classmethod
     def add_args(cls, parser):
-        parser.add_argument('--subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=90)
+        parser.add_argument('--subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=18)
         parser.add_argument('--dynamic_only', help='filter to only objects that can move', type=bool, default=True)
-        parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='token_aligned')
-        parser.add_argument('--dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
-        parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='chunked')
+        parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
+        parser.add_argument('--dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
+        parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--chunk_size', help='chunk size in steps if using chunked sequencing', type=int, default=10)
         parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
         parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', 'actions_rhand_apple', 'pick_rhand_apple'], default='nonzero_any')
@@ -172,7 +188,6 @@ class NBC:
 
     def __init__(self, args):
         self.args = args
-        assert args.features is not None, 'specify one or more features'
         if not args.recache and self.try_load_cached():
             print('loaded cached data from args')
             return
@@ -259,7 +274,9 @@ class NBC:
             'traj': traj,
             'avg_rel': avg_rel,
             'speed': speed,
-            'moving': moving
+            'moving': moving,
+            'dist_to_rhand': dist_to_rhand,
+            'dist_to_lhand': dist_to_lhand
         }
 
         def parse_target(seq, target):
@@ -284,6 +301,9 @@ class NBC:
             for key, seq in tqdm(list(self.sequences[type].items())):
                 n = seq['step'].unique().shape[0]
                 features[type][key] = []
+                if self.args.features is None:
+                    features[type][key] = np.zeros((n, 1))
+                    continue
                 for entry in self.args.features:
                     feature, target = entry.split(':')
                     target = parse_target(seq, target)
@@ -326,14 +346,14 @@ class NBC:
                     session = key[0]
                     group = actions[actions['session'] == session]
                     feat = self.features[type][key]
-                    labels_ = np.ones((feat.shape[0],))
+                    labels_ = np.zeros((feat.shape[0],))
                     actions_ = actions[actions['session'] == session]
                     for _, action in actions_.iterrows():
                         steps_ = np.arange(action['start_step'], action['end_step'])
                         for step in steps_:
                             if step in steps:
                                 idx = (steps == step).argmax()
-                                labels_[idx] = action_labels.index(action['action']) + 2
+                                labels_[idx] = action_labels.index(action['action']) + 1
                     labels[type][key] = labels_
                 self.n_classes = 5
             elif self.args.label_method == 'nonzero_any':
@@ -374,7 +394,6 @@ class NBC:
                     self.steps[type][key] = steps[mask > 0]
 
     def split_sequences(self):
-        #split dataset into sequences using one of three methods
         print('splitting sequences')
         sequencing = {'train': self.args.train_sequencing, 'dev': self.args.dev_sequencing, 'test': self.args.test_sequencing}
         sequences = {'train': {}, 'dev': {}, 'test': {}}
@@ -486,4 +505,8 @@ if __name__ == '__main__':
     print(next(iter(nbc.labels['test'].values())))
     print(next(iter(nbc.features['test'].values())))
     print(next(iter(nbc.features['test'].values())).shape)
+    import matplotlib.pyplot as plt
+    print(next(iter(nbc.steps['test'].keys())))
+    plt.plot(next(iter(nbc.steps['test'].values())), next(iter(nbc.features['test'].values())))
+    plt.show()
     #embeddings = nbc.get_vgg_embeddings()
