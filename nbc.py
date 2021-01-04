@@ -200,16 +200,26 @@ class NBC:
         self.trim()
         self.cache()
 
+    def args_to_id(self):
+        args_dict = {}
+        parser = argparse.ArgumentParser()
+        NBC.add_args(parser)
+        args = parser.parse_args()
+        for k in vars(args).keys():
+            assert k in vars(self.args)
+            args_dict[k] = vars(self.args)[k]
+        return json.dumps(args_dict)
+
     def try_load_cached(self):
-        args_dict = json.dumps(vars(self.args))
+        args_id = self.args_to_id()
         key_path = NBC_ROOT + 'tmp/cached/keys.json'
         if not os.path.exists(key_path):
             return False
         with open(key_path) as f:
             keys = json.load(f)
-        if args_dict not in keys:
+        if args_id not in keys:
             return False
-        fid = keys[args_dict]
+        fid = keys[args_id]
         fpath = NBC_ROOT + 'tmp/cached/{}.json'.format(fid)
         with open(fpath) as f:
             data = json.load(f)
@@ -224,14 +234,14 @@ class NBC:
         return True
 
     def cache(self):
-        args_dict = json.dumps(vars(self.args))
+        args_id = self.args_to_id()
         key_path = NBC_ROOT + 'tmp/cached/keys.json'
         if os.path.exists(key_path):
             with open(key_path) as f:
                 keys = json.load(f)
         else:
             keys = {}
-        if args_dict in keys:
+        if args_id in keys:
             return
         fid = str(uuid.uuid1())
         savepath = NBC_ROOT + 'tmp/cached/{}.json'.format(fid)
@@ -244,7 +254,7 @@ class NBC:
                 serialized[type]['steps'][str(key)] = self.steps[type][key].tolist()
         with open(savepath, 'w+') as f:
             json.dump(serialized, f)
-        keys[args_dict] = fid
+        keys[args_id] = fid
         with open(key_path, 'w+') as f:
             json.dump(keys, f)
         print('cached data')
