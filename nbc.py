@@ -188,6 +188,7 @@ class NBC:
 
     def __init__(self, args):
         self.args = args
+        self.sequencing = {'train': self.args.train_sequencing, 'dev': self.args.dev_sequencing, 'test': self.args.test_sequencing}
         if not args.recache and self.try_load_cached():
             print('loaded cached data from args')
             return
@@ -356,14 +357,19 @@ class NBC:
                     session = key[0]
                     group = actions[actions['session'] == session]
                     feat = self.features[type][key]
-                    labels_ = np.zeros((feat.shape[0],))
+                    labels_ = np.zeros((feat.shape[0],)).astype(int)
                     actions_ = actions[actions['session'] == session]
                     for _, action in actions_.iterrows():
                         steps_ = np.arange(action['start_step'], action['end_step'])
                         for step in steps_:
                             if step in steps:
                                 idx = (steps == step).argmax()
-                                labels_[idx] = action_labels.index(action['action']) + 1
+                                if labels_[idx] == 0:
+                                    labels_[idx] = action_labels.index(action['action']) + 1
+                        if self.sequencing[type] == 'actions':
+                            if not np.all(labels_ == labels_[0]):
+                                labels_[:] = 0
+                    assert not np.all(labels_ == 0)
                     labels[type][key] = labels_
                 self.n_classes = 5
             elif self.args.label_method == 'nonzero_any':
@@ -405,11 +411,10 @@ class NBC:
 
     def split_sequences(self):
         print('splitting sequences')
-        sequencing = {'train': self.args.train_sequencing, 'dev': self.args.dev_sequencing, 'test': self.args.test_sequencing}
         sequences = {'train': {}, 'dev': {}, 'test': {}}
         steps = {'train': {}, 'dev': {}, 'test': {}}
         for type in participants.keys():
-            if sequencing[type] == 'token_aligned':
+            if self.sequencing[type] == 'token_aligned':
                 words = pd.read_json(NBC_ROOT + 'words.json', orient='index')
                 words['token'] = words.apply(lambda row: row['lemma'] + '_' + row['pos'], axis=1)
                 tokens = words[words['token'].isin(target_tokens)]
@@ -425,7 +430,7 @@ class NBC:
                         assert len(rows) > 0, (group['step'], steps_)
                         sequences[type][(session, row['start_step'], row['token'])] = rows
                         steps[type][(session, row['start_step'], row['token'])] = rows['step'].unique()
-            elif sequencing[type] == 'chunked':
+            elif self.sequencing[type] == 'chunked':
                 for participant, task in itertools.product(participants[type], range(1, 7)):
                     session = '{}_task{}'.format(participant, task)
                     group = self.df[type][self.df[type]['session'] == session]
@@ -436,7 +441,7 @@ class NBC:
                         assert len(rows['step'].unique()) == self.args.chunk_size, (len(rows['step'].unique()), self.args.chunk_size)
                         sequences[type][(session, steps_[i])] = rows
                         steps[type][(session, steps_[i])] = rows['step'].unique()
-            elif sequencing[type] == 'actions':
+            elif self.sequencing[type] == 'actions':
                 actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
                 for participant, task in itertools.product(participants[type], range(1, 7)):
                     session = '{}_task{}'.format(participant, task)
@@ -450,7 +455,7 @@ class NBC:
                         sequences[type][(session, action, target, hand, idx)] = rows
                         steps[type][(session, action, target, hand, idx)] = rows['step'].unique()
             else:
-                assert sequencing[type] == 'session'
+                assert self.sequencing[type] == 'session'
                 for session, group in self.df[type].groupby('session'):
                     sequences[type][(session,)] = group
                     steps[type][(session,)] = group['step'].unique()
