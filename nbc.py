@@ -369,7 +369,6 @@ class NBC:
                         if self.sequencing[type] == 'actions':
                             if not np.all(labels_ == labels_[0]):
                                 labels_[:] = 0
-                    assert not np.all(labels_ == 0)
                     labels[type][key] = labels_
                 self.n_classes = 5
             elif self.args.label_method == 'nonzero_any':
