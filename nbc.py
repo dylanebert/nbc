@@ -179,35 +179,27 @@ class NBC:
         parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
-        parser.add_argument('--chunk_size', help='chunk size in steps if using chunked sequencing', type=int, default=10)
         parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
-        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', 'actions_rhand_apple', 'pick_rhand_apple'], default='nonzero_any')
-        parser.add_argument('--trim', help='idle padding to allow around actions, -1 to disable', type=int, default=-1)
-        parser.add_argument('--preprocess', help='apply preprocessing to features', action='store_true')
-        parser.add_argument('--recache', help='override old cached data', action='store_true')
+        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', \
+            'actions_rhand_apple', 'pick_rhand_apple', 'hand_motion_rhand', 'hand_motion_lhand'], default='nonzero_any')
 
     def __init__(self, args):
         self.args = args
         self.sequencing = {'train': self.args.train_sequencing, 'dev': self.args.dev_sequencing, 'test': self.args.test_sequencing}
-        if not args.recache and self.try_load_cached():
+        if self.try_load_cached():
             print('loaded cached data from args')
             return
         self.load()
         self.split_sequences()
         self.featurize()
-        if args.preprocess:
-            self.preprocess()
         self.generate_labels()
         self.trim()
         self.cache()
 
     def args_to_id(self):
         args_dict = {}
-        parser = argparse.ArgumentParser()
-        NBC.add_args(parser)
-        args = parser.parse_args()
-        for k in vars(args).keys():
-            assert k in vars(self.args)
+        for k in ['subsample', 'dynamic_only', 'train_sequencing', 'dev_sequencing', 'test_sequencing', 'features', 'label_method']:
+            assert k in vars(self.args), k
             args_dict[k] = vars(self.args)[k]
         return json.dumps(args_dict)
 
@@ -259,21 +251,6 @@ class NBC:
         with open(key_path, 'w+') as f:
             json.dump(keys, f)
         print('cached data')
-
-    def preprocess(self):
-        x_train = np.vstack(list(self.features['train'].values()))
-        scaler = preprocessing.MinMaxScaler().fit(x_train)
-        x_train = scaler.transform(x_train)
-        x_dev = scaler.transform(np.vstack(list(self.features['dev'].values())))
-        x_test = scaler.transform(np.vstack(list(self.features['test'].values())))
-        for type in ['train', 'dev', 'test']:
-            x = scaler.transform(np.vstack(list(self.features[type].values())))
-            idx = 0
-            for key in self.features[type].keys():
-                length = self.features[type][key].shape[0]
-                self.features[type][key] = np.nan_to_num(x[idx:idx+length])
-                idx += length
-            assert idx == x.shape[0]
 
     def featurize(self):
         print('featurizing')
@@ -371,6 +348,32 @@ class NBC:
                                 labels_[:] = 0
                     labels[type][key] = labels_
                 self.n_classes = 5
+            elif self.args.label_method in ['hand_motion_rhand', 'hand_motion_lhand']:
+                actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
+                if self.args.label_method == 'hand_motion_rhand':
+                    actions = actions[actions['hand'] == 'RightHand']
+                else:
+                    assert self.args.label_method == 'hand_motion_lhand'
+                    actions = actions[actions['hand'] == 'LeftHand']
+                for key, steps in self.steps[type].items():
+                    session = key[0]
+                    group = actions[actions['session'] == session]
+                    feat = self.features[type][key]
+                    labels_ = np.zeros((feat.shape[0],)).astype(int)
+                    actions_ = actions[actions['session'] == session]
+                    mapping = {'reach': 1, 'put': 1, 'pick': 2, 'retract': 2}
+                    for _, action in actions_.iterrows():
+                        steps_ = np.arange(action['start_step'], action['end_step'])
+                        for step in steps_:
+                            if step in steps:
+                                idx = (steps == step).argmax()
+                                if labels_[idx] == 0:
+                                    labels_[idx] = mapping[action['action']]
+                        if self.sequencing[type] == 'actions':
+                            if not np.all(labels_ == labels_[0]):
+                                labels_[:] = 0
+                    labels[type][key] = labels_
+                self.n_classes = 3
             elif self.args.label_method == 'nonzero_any':
                 for key in self.features[type].keys():
                     feat = self.features[type][key]
@@ -391,22 +394,11 @@ class NBC:
     def trim(self):
         for type in participants.keys():
             for key in list(self.features[type].keys()):
-                feat = self.features[type][key]
                 labels = self.labels[type][key]
-                steps = self.steps[type][key]
                 if np.all(labels == 0):
                     del self.features[type][key]
                     del self.labels[type][key]
                     del self.steps[type][key]
-                else:
-                    if self.args.trim < 0:
-                        continue
-                    mask = labels.copy()
-                    for i in range(1, self.args.trim):
-                        mask += np.roll(labels, i) + np.roll(labels, -i)
-                    self.labels[type][key] = labels[mask > 0]
-                    self.features[type][key] = feat[mask > 0, :]
-                    self.steps[type][key] = steps[mask > 0]
 
     def split_sequences(self):
         print('splitting sequences')
@@ -434,10 +426,10 @@ class NBC:
                     session = '{}_task{}'.format(participant, task)
                     group = self.df[type][self.df[type]['session'] == session]
                     steps_ = group['step'].unique()
-                    for i in range(0, steps_.shape[0] - self.args.chunk_size, self.args.chunk_size):
-                        start_step, end_step = steps_[i], steps_[i + self.args.chunk_size]
+                    for i in range(0, steps_.shape[0] - 10, 10):
+                        start_step, end_step = steps_[i], steps_[i + 10]
                         rows = group[group['step'].isin(range(start_step, end_step))]
-                        assert len(rows['step'].unique()) == self.args.chunk_size, (len(rows['step'].unique()), self.args.chunk_size)
+                        assert len(rows['step'].unique()) == 10, (len(rows['step'].unique()), 10)
                         sequences[type][(session, steps_[i])] = rows
                         steps[type][(session, steps_[i])] = rows['step'].unique()
             elif self.sequencing[type] == 'actions':
