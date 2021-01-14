@@ -5,7 +5,6 @@ import pickle
 import os
 from tqdm import tqdm
 import argparse
-from sklearn import preprocessing
 import json
 import uuid
 import ast
@@ -174,12 +173,12 @@ def parse_rows(seq, target):
 class NBC:
     @classmethod
     def add_args(cls, parser):
-        parser.add_argument('--subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=18)
+        parser.add_argument('--subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=9)
         parser.add_argument('--dynamic_only', help='filter to only objects that can move', type=bool, default=True)
         parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
-        parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj')
+        parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj', default=['speed:Apple'])
         parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', \
             'actions_rhand_apple', 'pick_rhand_apple', 'hand_motion_rhand', 'hand_motion_lhand'], default='nonzero_any')
 
@@ -508,11 +507,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     nbc = NBC(args)
-    print(next(iter(nbc.labels['test'].values())))
     print(next(iter(nbc.features['test'].values())))
+    print(next(iter(nbc.labels['test'].values())))
     print(next(iter(nbc.features['test'].values())).shape)
     import matplotlib.pyplot as plt
     print(next(iter(nbc.steps['test'].keys())))
     plt.plot(next(iter(nbc.steps['test'].values())), next(iter(nbc.features['test'].values())))
     plt.show()
-    #embeddings = nbc.get_vgg_embeddings()
