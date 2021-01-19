@@ -173,18 +173,18 @@ def parse_rows(seq, target):
 class NBC:
     @classmethod
     def add_args(cls, parser):
-        parser.add_argument('--subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=9)
-        parser.add_argument('--dynamic_only', help='filter to only objects that can move', type=bool, default=True)
-        parser.add_argument('--train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
-        parser.add_argument('--dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
-        parser.add_argument('--test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
-        parser.add_argument('--features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj', default=['speed:Apple'])
-        parser.add_argument('--label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', \
+        parser.add_argument('--nbc_subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=9)
+        parser.add_argument('--nbc_dynamic_only', help='filter to only objects that can move', type=bool, default=True)
+        parser.add_argument('--nbc_train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
+        parser.add_argument('--nbc_dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
+        parser.add_argument('--nbc_test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
+        parser.add_argument('--nbc_features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj', default=['speed:Apple'])
+        parser.add_argument('--nbc_label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', \
             'actions_rhand_apple', 'pick_rhand_apple', 'hand_motion_rhand', 'hand_motion_lhand'], default='nonzero_any')
 
     def __init__(self, args):
         self.args = args
-        self.sequencing = {'train': self.args.train_sequencing, 'dev': self.args.dev_sequencing, 'test': self.args.test_sequencing}
+        self.sequencing = {'train': self.args.nbc_train_sequencing, 'dev': self.args.nbc_dev_sequencing, 'test': self.args.nbc_test_sequencing}
         if self.try_load_cached():
             print('loaded cached data from args')
             return
@@ -197,7 +197,7 @@ class NBC:
 
     def args_to_id(self):
         args_dict = {}
-        for k in ['subsample', 'dynamic_only', 'train_sequencing', 'dev_sequencing', 'test_sequencing', 'features', 'label_method']:
+        for k in ['nbc_subsample', 'nbc_dynamic_only', 'nbc_train_sequencing', 'nbc_dev_sequencing', 'nbc_test_sequencing', 'nbc_features', 'nbc_label_method']:
             assert k in vars(self.args), k
             args_dict[k] = vars(self.args)[k]
         return json.dumps(args_dict)
@@ -288,10 +288,10 @@ class NBC:
             for key, seq in tqdm(list(self.sequences[type].items())):
                 n = seq['step'].unique().shape[0]
                 features[type][key] = []
-                if self.args.features is None:
+                if self.args.nbc_features is None:
                     features[type][key] = np.zeros((n, 1))
                     continue
-                for entry in self.args.features:
+                for entry in self.args.nbc_features:
                     feature, target = entry.split(':')
                     target = parse_target(seq, target)
                     feat = []
@@ -321,12 +321,12 @@ class NBC:
         print('generating labels')
         labels = {'train': {}, 'dev': {}, 'test': {}}
         for type in participants.keys():
-            if self.args.label_method in ['actions', 'actions_rhand_apple', 'pick_rhand_apple']:
+            if self.args.nbc_label_method in ['actions', 'actions_rhand_apple', 'pick_rhand_apple']:
                 actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
                 action_labels = ['reach', 'pick', 'put', 'retract']
-                if self.args.label_method == 'actions_rhand_apple':
+                if self.args.nbc_label_method == 'actions_rhand_apple':
                     actions = actions[(actions['target'] == 'Apple') & (actions['hand'] == 'RightHand')]
-                elif self.args.label_method == 'pick_rhand_apple':
+                elif self.args.nbc_label_method == 'pick_rhand_apple':
                     actions = actions[(actions['target'] == 'Apple') & (actions['hand'] == 'RightHand') & (actions['action'] == 'pick')]
                     action_labels = ['pick']
                 for key, steps in self.steps[type].items():
@@ -347,12 +347,12 @@ class NBC:
                                 labels_[:] = 0
                     labels[type][key] = labels_
                 self.n_classes = 5
-            elif self.args.label_method in ['hand_motion_rhand', 'hand_motion_lhand']:
+            elif self.args.nbc_label_method in ['hand_motion_rhand', 'hand_motion_lhand']:
                 actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
-                if self.args.label_method == 'hand_motion_rhand':
+                if self.args.nbc_label_method == 'hand_motion_rhand':
                     actions = actions[actions['hand'] == 'RightHand']
                 else:
-                    assert self.args.label_method == 'hand_motion_lhand'
+                    assert self.args.nbc_label_method == 'hand_motion_lhand'
                     actions = actions[actions['hand'] == 'LeftHand']
                 for key, steps in self.steps[type].items():
                     session = key[0]
@@ -373,14 +373,14 @@ class NBC:
                                 labels_[:] = 0
                     labels[type][key] = labels_
                 self.n_classes = 3
-            elif self.args.label_method == 'nonzero_any':
+            elif self.args.nbc_label_method == 'nonzero_any':
                 for key in self.features[type].keys():
                     feat = self.features[type][key]
                     labels_ = np.any(np.abs(feat) > 0, axis=1).astype(int)
                     labels[type][key] = labels_
                 self.n_classes = 2
             else:
-                assert self.args.label_method == 'nonzero_by_dim'
+                assert self.args.nbc_label_method == 'nonzero_by_dim'
                 for key in self.features[type].keys():
                     feat = self.features[type][key]
                     labels_ = np.zeros((feat.shape[0],))
@@ -454,7 +454,7 @@ class NBC:
 
     def load(self):
         #load from tmp file if possible
-        tmp_path = NBC_ROOT + 'tmp/spatial_subsample={}_dynamic-only={}.p'.format(self.args.subsample, self.args.dynamic_only)
+        tmp_path = NBC_ROOT + 'tmp/spatial_subsample={}_dynamic-only={}.p'.format(self.args.nbc_subsample, self.args.nbc_dynamic_only)
         if os.path.exists(tmp_path):
             with open(tmp_path, 'rb') as f:
                 self.df = pickle.load(f)
@@ -468,9 +468,9 @@ class NBC:
                 session = '{}_task{}'.format(participant, task)
                 df_ = pd.read_json(NBC_ROOT + 'release/{}/spatial.json'.format(session), orient='index')
                 verify_spatial(df_)
-                if self.args.dynamic_only:
+                if self.args.nbc_dynamic_only:
                     df_ = df_[df_['dynamic'] == True]
-                df_ = subsample(df_, self.args.subsample)
+                df_ = subsample(df_, self.args.nbc_subsample)
                 df_['session'] = session
                 self.df[type].append(df_)
             self.df[type] = pd.concat(self.df[type]).reset_index(drop=True)
