@@ -179,7 +179,7 @@ class NBC:
         parser.add_argument('--nbc_dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--nbc_test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--nbc_features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj', default=['speed:Apple'])
-        parser.add_argument('--nbc_label_method', choices=['nonzero_any', 'nonzero_by_dim', 'actions', \
+        parser.add_argument('--nbc_label_method', choices=['nonzero_any', 'actions', \
             'actions_rhand_apple', 'pick_rhand_apple', 'hand_motion_rhand', 'hand_motion_lhand'], default='nonzero_any')
 
     def __init__(self, args):
@@ -215,6 +215,8 @@ class NBC:
         fpath = NBC_ROOT + 'tmp/cached/{}.json'.format(fid)
         with open(fpath) as f:
             data = json.load(f)
+        self.n_classes = int(data['n_classes'])
+        self.label_mapping = data['label_mapping']
         self.features = {}; self.labels = {}; self.steps = {}
         for type in ['train', 'dev', 'test']:
             self.features[type] = {}; self.labels[type] = {}; self.steps[type] = {}
@@ -237,7 +239,7 @@ class NBC:
             return
         fid = str(uuid.uuid1())
         savepath = NBC_ROOT + 'tmp/cached/{}.json'.format(fid)
-        serialized = {}
+        serialized = {'n_classes': self.n_classes, 'label_mapping': self.label_mapping}
         for type in ['train', 'dev', 'test']:
             serialized[type] = {'features': {}, 'labels': {}, 'steps': {}}
             for key in self.features[type].keys():
@@ -347,6 +349,7 @@ class NBC:
                                 labels_[:] = 0
                     labels[type][key] = labels_
                 self.n_classes = 5
+                self.label_mapping = {'0': 'idle', '1': 'reach', '2': 'pick', '3': 'put', '4': 'retract'}
             elif self.args.nbc_label_method in ['hand_motion_rhand', 'hand_motion_lhand']:
                 actions = pd.read_json(NBC_ROOT + 'actions.json', orient='index')
                 if self.args.nbc_label_method == 'hand_motion_rhand':
@@ -373,21 +376,15 @@ class NBC:
                                 labels_[:] = 0
                     labels[type][key] = labels_
                 self.n_classes = 3
-            elif self.args.nbc_label_method == 'nonzero_any':
+                self.label_mapping = {'0': 'idle', '1': 'reach', '2': 'retract'}
+            else:
+                assert self.args.nbc_label_method == 'nonzero_any'
                 for key in self.features[type].keys():
                     feat = self.features[type][key]
                     labels_ = np.any(np.abs(feat) > 0, axis=1).astype(int)
                     labels[type][key] = labels_
                 self.n_classes = 2
-            else:
-                assert self.args.nbc_label_method == 'nonzero_by_dim'
-                for key in self.features[type].keys():
-                    feat = self.features[type][key]
-                    labels_ = np.zeros((feat.shape[0],))
-                    nonzero = (np.abs(feat) > 0)
-                    labels_[np.any(nonzero, axis=1)] = (np.argmax(nonzero, axis=1) + 1)[np.any(nonzero, axis=1)]
-                    labels[type][key] = labels_
-                self.n_classes = next(iter(self.features[type].values())).shape[-1] + 1
+                self.label_mapping = {'0': 'zero', '1': 'nonzero'}
         self.labels = labels
 
     def trim(self):
