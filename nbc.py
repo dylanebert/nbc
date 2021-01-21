@@ -86,7 +86,7 @@ def get_most_moving_hand(seq):
 
 def get_feature_direct(seq, target, feat):
     rows = parse_rows(seq, target)
-    return rows[feat].to_numpy()[:, np.newaxis]
+    return rows[feat].to_numpy()[:, np.newaxis], [feat + ':' + target]
 
 def reparameterize(vec):
     start = vec[0]; end = vec[-1]
@@ -99,17 +99,19 @@ def dist_to_head(seq, target):
     head_pos = seq[seq['name'] == 'Head'][['posX', 'posY', 'posZ']].to_numpy()
     target_pos = seq[seq['name'] == target][['posX', 'posY', 'posZ']].to_numpy()
     dist = np.sum(np.square(target_pos - head_pos), axis=1)
-    return reparameterize(dist)
+    dist = reparameterize(dist)
+    return dist, ['dist_to_head_params:' + target] * dist.shape[0]
 
 def avg_vel(seq, target):
     rows = parse_rows(seq, target)
     avg_vel = np.mean(rows[['velX', 'velY', 'velZ']].to_numpy(), axis=1)
-    return reparameterize(avg_vel)
+    avg_vel = reparameterize(avg_vel)
+    return avg_vel, ['avg_vel_params:' + target] * avg_vel.shape[0]
 
 def var_vel(seq, target):
     rows = parse_rows(seq, target)
     var_vel = np.var(rows[['velX', 'velY', 'velZ']].to_numpy(), axis=1)
-    return np.mean(var_vel)[np.newaxis]
+    return np.mean(var_vel)[np.newaxis], ['var_vel_x:' + target, 'var_vel_y:' + target, 'var_vel_z:' + target]
 
 def traj(seq, target):
     rows = parse_rows(seq, target)
@@ -129,37 +131,38 @@ def traj(seq, target):
             kp1 = trough[i]
             kp2 = peak[i]
         feat += [kp1 - start, kp2 - kp1, end - kp2]
-    return np.array(feat)
+    feat = np.array(feat)
+    return feat, ['traj:' + target] * feat.shape[0]
 
 def avg_rel(seq, target):
     rows = parse_rows(seq, target)
     avg_pos = rows[['relPosX', 'relPosY', 'relPosZ']].to_numpy()
-    return np.mean(avg_pos, axis=0)
+    return np.mean(avg_pos, axis=0), ['avg_rel_x:' + target, 'avg_rel_y:' + target, 'avg_rel_z:' + target]
 
 def speed(seq, target):
     rows = parse_rows(seq, target)
     speed = rows.apply(lambda row: row['velX'] * row['velX'] + row['velY'] * row['velY'] + row['velZ'] * row['velZ'], axis=1).to_numpy()
-    return speed[:, np.newaxis]
+    return speed[:, np.newaxis], ['speed:' + target]
 
 def moving(seq, target):
     rows = parse_rows(seq, target)
     speed = rows.apply(lambda row: row['velX'] * row['velX'] + row['velY'] * row['velY'] + row['velZ'] * row['velZ'], axis=1).to_numpy()
     speed[speed > 0] = 1
-    return speed[:, np.newaxis]
+    return speed[:, np.newaxis], ['moving:' + target]
 
 def dist_to_rhand(seq, target):
     rows = parse_rows(seq, target)
     rhand_pos = seq[seq['name'] == 'RightHand'][['posX', 'posY', 'posZ']].to_numpy()
     target_pos = rows[['posX', 'posY', 'posZ']].to_numpy()
     dist = np.linalg.norm(target_pos - rhand_pos, axis=1)
-    return dist[:, np.newaxis]
+    return dist[:, np.newaxis], ['dist_to_rhand:' + target]
 
 def dist_to_lhand(seq, target):
     rows = parse_rows(seq, target)
     rhand_pos = seq[seq['name'] == 'LeftHand'][['posX', 'posY', 'posZ']].to_numpy()
     target_pos = rows[['posX', 'posY', 'posZ']].to_numpy()
     dist = np.linalg.norm(target_pos - rhand_pos, axis=1)
-    return dist[:, np.newaxis]
+    return dist[:, np.newaxis], ['dist_to_lhand:' + target]
 
 def parse_rows(seq, target):
     if isinstance(target, list):
@@ -217,6 +220,7 @@ class NBC:
             data = json.load(f)
         self.n_classes = int(data['n_classes'])
         self.label_mapping = data['label_mapping']
+        self.feature_mapping = data['feature_mapping']
         self.features = {}; self.labels = {}; self.steps = {}
         for type in ['train', 'dev', 'test']:
             self.features[type] = {}; self.labels[type] = {}; self.steps[type] = {}
@@ -239,7 +243,7 @@ class NBC:
             return
         fid = str(uuid.uuid1())
         savepath = NBC_ROOT + 'tmp/cached/{}.json'.format(fid)
-        serialized = {'n_classes': self.n_classes, 'label_mapping': self.label_mapping}
+        serialized = {'n_classes': self.n_classes, 'label_mapping': self.label_mapping, 'feature_mapping': self.feature_mapping}
         for type in ['train', 'dev', 'test']:
             serialized[type] = {'features': {}, 'labels': {}, 'steps': {}}
             for key in self.features[type].keys():
@@ -286,28 +290,37 @@ class NBC:
                 return [target]
 
         features = {'train': {}, 'dev': {}, 'test': {}}
+        feature_mapping = {}
         for type in participants.keys():
             for key, seq in tqdm(list(self.sequences[type].items())):
                 n = seq['step'].unique().shape[0]
                 features[type][key] = []
                 if self.args.nbc_features is None:
                     features[type][key] = np.zeros((n, 1))
+                    feature_mapping = {'0': 'none'}
                     continue
+                i = 0
                 for entry in self.args.nbc_features:
                     feature, target = entry.split(':')
                     target = parse_target(seq, target)
                     feat = []
                     if feature in functions:
                         for target_ in target:
-                            feat_ = functions[feature](seq, target_)
+                            feat_, names = functions[feature](seq, target_)
                             assert feat_.shape[0] == n or feat_.ndim == 1, (feat_.shape, n)
                             features[type][key].append(feat_)
+                            for name in names:
+                                feature_mapping[str(i)] = name
+                                i += 1
                     else:
                         assert feature in seq.columns, feature
                         for target_ in target:
-                            feat_ = get_feature_direct(seq, target_, feature)
+                            feat_, names = get_feature_direct(seq, target_, feature)
                             assert feat_.shape[0] == n or feat_.ndim == 1, (feat_.shape, n)
                             features[type][key].append(feat_)
+                            for name in names:
+                                feature_mapping[str(i)] = name
+                                i += 1
                 if features[type][key][0].ndim == 1:
                     for i in range(len(features[type][key])):
                         assert features[type][key][i].ndim == 1
@@ -318,6 +331,7 @@ class NBC:
                     features[type][key] = np.concatenate(features[type][key], axis=-1)
 
         self.features = features
+        self.feature_mapping = feature_mapping
 
     def generate_labels(self):
         print('generating labels')
