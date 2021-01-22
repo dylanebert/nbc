@@ -181,9 +181,10 @@ class NBC:
         parser.add_argument('--nbc_train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--nbc_dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
         parser.add_argument('--nbc_test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
+        parser.add_argument('--nbc_chunk_size', help='chunk size when using chunked sequencing', type=int, default=10)
         parser.add_argument('--nbc_features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj', default=['speed:Apple'])
-        parser.add_argument('--nbc_label_method', choices=['nonzero_any', 'actions', \
-            'actions_rhand_apple', 'pick_rhand_apple', 'hand_motion_rhand', 'hand_motion_lhand'], default='nonzero_any')
+        parser.add_argument('--nbc_label_method', choices=['none', 'nonzero_any', 'actions', \
+            'actions_rhand_apple', 'pick_rhand_apple', 'hand_motion_rhand', 'hand_motion_lhand'], default='none')
 
     def __init__(self, args):
         self.args = args
@@ -200,7 +201,7 @@ class NBC:
 
     def args_to_id(self):
         args_dict = {}
-        for k in ['nbc_subsample', 'nbc_dynamic_only', 'nbc_train_sequencing', 'nbc_dev_sequencing', 'nbc_test_sequencing', 'nbc_features', 'nbc_label_method']:
+        for k in ['nbc_subsample', 'nbc_dynamic_only', 'nbc_train_sequencing', 'nbc_dev_sequencing', 'nbc_test_sequencing', 'nbc_features', 'nbc_label_method', 'nbc_chunk_size']:
             assert k in vars(self.args), k
             args_dict[k] = vars(self.args)[k]
         return json.dumps(args_dict)
@@ -391,14 +392,20 @@ class NBC:
                     labels[type][key] = labels_
                 self.n_classes = 3
                 self.label_mapping = {'0': 'idle', '1': 'reach', '2': 'retract'}
-            else:
-                assert self.args.nbc_label_method == 'nonzero_any'
+            elif self.args.nbc_label_method == 'nonzero_any':
                 for key in self.features[type].keys():
                     feat = self.features[type][key]
                     labels_ = np.any(np.abs(feat) > 0, axis=1).astype(int)
                     labels[type][key] = labels_
                 self.n_classes = 2
                 self.label_mapping = {'0': 'zero', '1': 'nonzero'}
+            else:
+                assert self.args.nbc_label_method == 'none'
+                for key in self.features[type].keys():
+                    feat = self.features[type][key]
+                    labels[type][key] = np.zeros((feat.shape[0],)).astype(int)
+                self.n_classes = 1
+                self.label_mapping = {'0': 'zero'}
         self.labels = labels
 
     def trim(self):
@@ -436,10 +443,10 @@ class NBC:
                     session = '{}_task{}'.format(participant, task)
                     group = self.df[type][self.df[type]['session'] == session]
                     steps_ = group['step'].unique()
-                    for i in range(0, steps_.shape[0] - 10, 10):
-                        start_step, end_step = steps_[i], steps_[i + 10]
+                    for i in range(0, steps_.shape[0] - self.args.nbc_chunk_size, self.args.nbc_chunk_size):
+                        start_step, end_step = steps_[i], steps_[i + self.args.nbc_chunk_size]
                         rows = group[group['step'].isin(range(start_step, end_step))]
-                        assert len(rows['step'].unique()) == 10, (len(rows['step'].unique()), 10)
+                        assert len(rows['step'].unique()) == self.args.nbc_chunk_size, (len(rows['step'].unique()), self.args.nbc_chunk_size)
                         sequences[type][(session, steps_[i])] = rows
                         steps[type][(session, steps_[i])] = rows['step'].unique()
             elif self.sequencing[type] == 'actions':
