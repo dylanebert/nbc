@@ -37,7 +37,7 @@ class NBCWrapper():
                 assert self.args.nbc_output_type == 'classifier'
                 y[type] = np.zeros((n,)).astype(int)
             for i, (key, labels) in enumerate(self.nbc.labels[type].items()):
-                feat = np.clip(np.nan_to_num(self.nbc.features[type][key]), -10., 10.)
+                feat = self.nbc.features[type][key]
                 x[type][i,:feat.shape[0]] = feat
                 if self.args.nbc_output_type == 'seq2seq':
                     y[type][i,:feat.shape[0]] = labels

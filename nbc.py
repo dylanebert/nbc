@@ -178,10 +178,11 @@ class NBC:
     def add_args(cls, parser):
         parser.add_argument('--nbc_subsample', help='subsampling step size, i.e. 1 for original 90hz, 9 for 10hz, 90 for 1hz', type=int, default=9)
         parser.add_argument('--nbc_dynamic_only', help='filter to only objects that can move', type=bool, default=True)
-        parser.add_argument('--nbc_train_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
-        parser.add_argument('--nbc_dev_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
-        parser.add_argument('--nbc_test_sequencing', choices=['token_aligned', 'chunked', 'session', 'actions'], default='session')
+        parser.add_argument('--nbc_train_sequencing', choices=['token_aligned', 'chunked', 'sliding_chunks', 'session', 'actions'], default='session')
+        parser.add_argument('--nbc_dev_sequencing', choices=['token_aligned', 'chunked', 'sliding_chunks', 'session', 'actions'], default='session')
+        parser.add_argument('--nbc_test_sequencing', choices=['token_aligned', 'chunked', 'sliding_chunks', 'session', 'actions'], default='session')
         parser.add_argument('--nbc_chunk_size', help='chunk size when using chunked sequencing', type=int, default=10)
+        parser.add_argument('--nbc_sliding_chunk_stride', help='stride when using sliding_chunks sequencing', type=int, default=3)
         parser.add_argument('--nbc_features', nargs='+', help='feature:target, e.g. posX:Apple, dist_to_head:most_moving_obj', default=['speed:Apple'])
         parser.add_argument('--nbc_label_method', choices=['none', 'nonzero_any', 'actions', \
             'actions_rhand_apple', 'pick_rhand_apple', 'hand_motion_rhand', 'hand_motion_lhand'], default='none')
@@ -201,7 +202,8 @@ class NBC:
 
     def args_to_id(self):
         args_dict = {}
-        for k in ['nbc_subsample', 'nbc_dynamic_only', 'nbc_train_sequencing', 'nbc_dev_sequencing', 'nbc_test_sequencing', 'nbc_features', 'nbc_label_method', 'nbc_chunk_size']:
+        for k in ['nbc_subsample', 'nbc_dynamic_only', 'nbc_train_sequencing', 'nbc_dev_sequencing', 'nbc_test_sequencing', 'nbc_chunk_size', 'nbc_sliding_chunk_stride', \
+            'nbc_features', 'nbc_label_method']:
             assert k in vars(self.args), k
             args_dict[k] = vars(self.args)[k]
         return json.dumps(args_dict)
@@ -257,6 +259,16 @@ class NBC:
         with open(key_path, 'w+') as f:
             json.dump(keys, f)
         print('cached data')
+
+    def trim(self):
+        if self.args.nbc_label_method == 'none':
+            return
+        for type in ['train', 'dev', 'test']:
+            for key, labels in self.labels[type].items():
+                if np.all(labels == 0):
+                    del self.features[type][key]
+                    del self.labels[type][key]
+                    del self.steps[type][key]
 
     def featurize(self):
         print('featurizing')
@@ -325,11 +337,11 @@ class NBC:
                 if features[type][key][0].ndim == 1:
                     for i in range(len(features[type][key])):
                         assert features[type][key][i].ndim == 1
-                    features[type][key] = np.concatenate(features[type][key])
+                    features[type][key] = np.clip(np.nan_to_num(np.concatenate(features[type][key])), -10., 10.)
                 else:
                     for i in range(len(features[type][key])):
                         assert features[type][key][i].ndim == 2
-                    features[type][key] = np.concatenate(features[type][key], axis=-1)
+                    features[type][key] = np.clip(np.nan_to_num(np.concatenate(features[type][key], axis=-1)), -10., 10.)
 
         self.features = features
         self.feature_mapping = feature_mapping
@@ -408,15 +420,6 @@ class NBC:
                 self.label_mapping = {'0': 'zero'}
         self.labels = labels
 
-    def trim(self):
-        for type in participants.keys():
-            for key in list(self.features[type].keys()):
-                labels = self.labels[type][key]
-                if np.all(labels == 0):
-                    del self.features[type][key]
-                    del self.labels[type][key]
-                    del self.steps[type][key]
-
     def split_sequences(self):
         print('splitting sequences')
         sequences = {'train': {}, 'dev': {}, 'test': {}}
@@ -438,12 +441,17 @@ class NBC:
                         assert len(rows) > 0, (group['step'], steps_)
                         sequences[type][(session, row['start_step'], row['token'])] = rows
                         steps[type][(session, row['start_step'], row['token'])] = rows['step'].unique()
-            elif self.sequencing[type] == 'chunked':
+            elif self.sequencing[type] in ['chunked', 'sliding_chunks']:
                 for participant, task in itertools.product(participants[type], range(1, 7)):
                     session = '{}_task{}'.format(participant, task)
                     group = self.df[type][self.df[type]['session'] == session]
                     steps_ = group['step'].unique()
-                    for i in range(0, steps_.shape[0] - self.args.nbc_chunk_size, self.args.nbc_chunk_size):
+                    if self.sequencing[type] == 'chunked':
+                        slide = self.args.nbc_chunk_size
+                    else:
+                        assert self.sequencing[type] == 'sliding_chunks'
+                        slide = self.args.nbc_sliding_chunk_stride
+                    for i in range(0, steps_.shape[0] - self.args.nbc_chunk_size, slide):
                         start_step, end_step = steps_[i], steps_[i + self.args.nbc_chunk_size]
                         rows = group[group['step'].isin(range(start_step, end_step))]
                         assert len(rows['step'].unique()) == self.args.nbc_chunk_size, (len(rows['step'].unique()), self.args.nbc_chunk_size)
