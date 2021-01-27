@@ -264,7 +264,9 @@ class NBC:
         if self.args.nbc_label_method == 'none':
             return
         for type in ['train', 'dev', 'test']:
-            for key, labels in self.labels[type].items():
+            keys = list(self.labels[type].keys())
+            for key in keys:
+                labels = self.labels[type][key]
                 if np.all(labels == 0):
                     del self.features[type][key]
                     del self.labels[type][key]

@@ -6,8 +6,6 @@ sys.path.append('C:/Users/dylan/Documents')
 from nbc.nbc import NBC
 import argparse
 
-PAD_VALUE = -1e9
-
 class NBCWrapper():
     @classmethod
     def add_args(cls, parser):
@@ -21,37 +19,24 @@ class NBCWrapper():
         self.preprocess()
 
     def to_padded_dset(self):
-        seq_len = 0
-        for type in ['train', 'dev', 'test']:
-            for seq in self.nbc.labels[type].values():
-                if seq.shape[0] > seq_len:
-                    seq_len = seq.shape[0]
-        self.n_dim = next(iter(self.nbc.features['train'].values())).shape[-1]
         x = {}; y = {}
         for type in ['train', 'dev', 'test']:
-            n = len(self.nbc.labels[type])
-            x[type] = np.ones((n, seq_len, self.n_dim)).astype(np.float32) * PAD_VALUE
+            x[type] = np.stack(list(self.nbc.features[type].values()), axis=0)
             if self.args.nbc_output_type == 'seq2seq':
-                y[type] = np.zeros((n, seq_len)).astype(int)
+                y[type] = np.stack(list(self.nbc.labels[type].values()), axis=0).astype(int)
             else:
                 assert self.args.nbc_output_type == 'classifier'
-                y[type] = np.zeros((n,)).astype(int)
-            for i, (key, labels) in enumerate(self.nbc.labels[type].items()):
-                feat = self.nbc.features[type][key]
-                x[type][i,:feat.shape[0]] = feat
-                if self.args.nbc_output_type == 'seq2seq':
-                    y[type][i,:feat.shape[0]] = labels
-                else:
-                    assert self.args.nbc_output_type == 'classifier'
-                    assert np.all(labels == labels[0]), (labels[0], labels)
-                    label = labels[0]
-                    y[type][i] = label
+                y[type] = np.zeros((len(self.nbc.labels[type]),)).astype(int)
+                for i, labels in enumerate(self.nbc.labels[type].values()):
+                    assert np.all(labels == labels[0])
+                    y[type][i] = labels[0]
         self.x = x
         self.y = y
 
     def preprocess(self):
         if self.args.nbc_preprocessing is None:
             return
+        n_dim = self.x['train'].shape[-1]
         for arg in self.args.nbc_preprocessing:
             x_scaled = {}
             if arg in ['z-norm', 'min-max', 'robust']:
@@ -62,12 +47,9 @@ class NBCWrapper():
                 else:
                     assert arg == 'robust'
                     scaler = preprocessing.RobustScaler()
-                mask = ~(self.x['train'] == PAD_VALUE)
-                scaler.fit(self.x['train'][mask].reshape((-1, self.n_dim)))
+                scaler.fit(self.x['train'].reshape((-1, n_dim)))
                 for type in ['train', 'dev', 'test']:
-                    mask = ~(self.x[type] == PAD_VALUE)
-                    x_scaled[type] = np.ones(self.x[type].shape) * PAD_VALUE
-                    x_scaled[type][mask] = scaler.transform(self.x[type][mask].reshape((-1, self.n_dim))).reshape(self.x[type][mask].shape)
+                    x_scaled[type] = scaler.transform(self.x[type].reshape((-1, n_dim))).reshape(self.x[type].shape)
             self.x = x_scaled
 
 if __name__ == '__main__':
